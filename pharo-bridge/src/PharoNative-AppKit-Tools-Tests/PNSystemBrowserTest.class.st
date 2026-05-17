@@ -22,18 +22,12 @@ Class {
 PNSystemBrowserTest >> setUp [
 
 	super setUp.
-	"Install the fake adaptor as the singleton so any widget wrappers
-	created during the test see a recording stand-in instead of a real
-	TCP connection. We then build the full widget tree -- with the fake
-	doing the talking -- so methods that mutate widgets in the selection
-	cascade have something to send commands to. No window is shown."
 	previousAdaptor := PNAppKitAdaptor classVarNamed: #Default.
 	PNAppKitAdaptor classVarNamed: #Default put: PNFakeAdaptor new.
 	browser := PNSystemBrowser new.
 	browser initializeFilterState.
 	browser buildWindow.
 	browser wireSelectionHandlers.
-	"Reset the recording so individual tests start with a clean ledger."
 	self fakeAdaptor reset
 ]
 
@@ -52,9 +46,6 @@ PNSystemBrowserTest >> fakeAdaptor [
 
 { #category : 'helpers' }
 PNSystemBrowserTest >> samplePackages [
-	"Use real Pharo packages but pick a small set so tests are fast and
-	deterministic. The bridge's own packages exist in every image we
-	target and are stable enough to rely on."
 
 	^ {
 		  PackageOrganizer default packageNamed: 'PharoNative-Bridge-Core'.
@@ -62,7 +53,7 @@ PNSystemBrowserTest >> samplePackages [
 		  PackageOrganizer default packageNamed: 'PharoNative-AppKit-Tools' }
 ]
 
-{ #category : 'tests - filtering' }
+{ #category : 'tests - filtering - packages' }
 PNSystemBrowserTest >> testPackagesFilteredByEmptyReturnsAllPackages [
 
 	browser instVarNamed: 'allPackages' put: self samplePackages.
@@ -71,7 +62,7 @@ PNSystemBrowserTest >> testPackagesFilteredByEmptyReturnsAllPackages [
 		equals: self samplePackages
 ]
 
-{ #category : 'tests - filtering' }
+{ #category : 'tests - filtering - packages' }
 PNSystemBrowserTest >> testPackagesFilteredByTrimsWhitespace [
 
 	browser instVarNamed: 'allPackages' put: self samplePackages.
@@ -80,7 +71,7 @@ PNSystemBrowserTest >> testPackagesFilteredByTrimsWhitespace [
 		equals: self samplePackages
 ]
 
-{ #category : 'tests - filtering' }
+{ #category : 'tests - filtering - packages' }
 PNSystemBrowserTest >> testPackagesFilteredByMatchesCaseInsensitiveSubstring [
 
 	| matches |
@@ -92,7 +83,7 @@ PNSystemBrowserTest >> testPackagesFilteredByMatchesCaseInsensitiveSubstring [
 			 p name asLowercase includesSubstring: 'appkit' ])
 ]
 
-{ #category : 'tests - filtering' }
+{ #category : 'tests - filtering - packages' }
 PNSystemBrowserTest >> testPackagesFilteredByNoMatchReturnsEmpty [
 
 	browser instVarNamed: 'allPackages' put: self samplePackages.
@@ -100,21 +91,22 @@ PNSystemBrowserTest >> testPackagesFilteredByNoMatchReturnsEmpty [
 		assertEmpty: (browser packagesFilteredBy: 'no-such-thing-zzz')
 ]
 
-{ #category : 'tests - filtering' }
-PNSystemBrowserTest >> testClassesFilteredByMatchesDisplayName [
+{ #category : 'tests - filtering - classes' }
+PNSystemBrowserTest >> testClassesFilteredByMatchesClassName [
 
-	| entries matches |
-	entries := {
-		           { Object. 'instance'. 'Object' }.
-		           { Object. 'class'. 'Object class' }.
-		           { Behavior. 'instance'. 'Behavior' } }.
-	browser instVarNamed: 'allClasses' put: entries.
+	| matches |
+	browser
+		instVarNamed: 'allClasses'
+		put: { Object. Behavior. Class. Metaclass }.
 	matches := browser classesFilteredBy: 'class'.
-	self assert: matches size equals: 1.
-	self assert: (matches first at: 3) equals: 'Object class'
+	"Class and Metaclass both contain 'class' in their names (case-
+	insensitive)."
+	self assert: matches size equals: 2.
+	self assert: (matches includes: Class).
+	self assert: (matches includes: Metaclass)
 ]
 
-{ #category : 'tests - filtering' }
+{ #category : 'tests - filtering - methods' }
 PNSystemBrowserTest >> testMethodsFilteredByMatchesSelector [
 
 	browser instVarNamed: 'allMethods' put: #( foo bar foobar baz ).
@@ -125,7 +117,7 @@ PNSystemBrowserTest >> testMethodsFilteredByMatchesSelector [
 	self assertEmpty: (browser methodsFilteredBy: 'qux')
 ]
 
-{ #category : 'tests - tree shape' }
+{ #category : 'tests - tree shape - packages' }
 PNSystemBrowserTest >> testTreeNodeForPackageHasIdAndLabel [
 
 	| pkg node |
@@ -137,16 +129,81 @@ PNSystemBrowserTest >> testTreeNodeForPackageHasIdAndLabel [
 		((node at: 'label') beginsWith: 'PharoNative-AppKit-Tools  (')
 ]
 
-{ #category : 'tests - tree shape' }
+{ #category : 'tests - tree shape - packages' }
 PNSystemBrowserTest >> testTagNodesForPackageHandlesUntaggedPackages [
 
 	| pkg children |
-	"PharoNative-AppKit-Tools currently has no non-root tags, so it
-	yields an empty children list."
 	pkg := PackageOrganizer default
 		       packageNamed: 'PharoNative-AppKit-Tools'.
 	children := browser tagNodesForPackage: pkg.
 	self assertEmpty: children
+]
+
+{ #category : 'tests - tree shape - classes' }
+PNSystemBrowserTest >> testClassHierarchyTreeRootsAreClassesWithoutInPackageSuperclass [
+	"For the set { Object, Behavior } we expect a single root:
+	Object (root because ProtoObject isn't in the set), with Behavior
+	as its sole in-package child."
+
+	| roots root behaviorNode |
+	roots := browser classHierarchyTreeFor: { Object. Behavior }.
+	self assert: roots size equals: 1.
+	root := roots first.
+	self assert: (root at: 'id') equals: 'cls:Object'.
+	self assert: (root at: 'children') size equals: 1.
+	behaviorNode := (root at: 'children') first.
+	self assert: (behaviorNode at: 'id') equals: 'cls:Behavior'.
+	self assertEmpty: (behaviorNode at: 'children')
+]
+
+{ #category : 'tests - tree shape - classes' }
+PNSystemBrowserTest >> testClassHierarchyTreeProducesMultipleRootsWhenAncestorsAreOutsideSet [
+	"With { Object, Behavior, Class, Metaclass } there are three roots:
+	   Object             -- ProtoObject isn't in the set
+	   Class              -- ClassDescription isn't in the set
+	   Metaclass          -- ClassDescription isn't in the set
+	with Behavior nested as a child of Object."
+
+	| roots ids |
+	roots := browser classHierarchyTreeFor:
+		         { Object. Behavior. Class. Metaclass }.
+	ids := (roots collect: [ :n | n at: 'id' ]) asSet.
+	self
+		assert: ids
+		equals:
+		(Set
+			 with: 'cls:Object'
+			 with: 'cls:Class'
+			 with: 'cls:Metaclass').
+	self
+		assert: (((roots detect: [ :n | (n at: 'id') = 'cls:Object' ])
+				  at: 'children')
+				 collect: [ :n | n at: 'id' ])
+		equals: #( 'cls:Behavior' )
+]
+
+{ #category : 'tests - tree shape - classes' }
+PNSystemBrowserTest >> testClassTreeNodeNestsImmediateSubclassesOnly [
+
+	| dict node |
+	dict := IdentityDictionary new.
+	dict at: Object put: { Behavior }.
+	dict at: Behavior put: { Class }.
+	dict at: Class put: #(  ).
+	node := browser classTreeNodeFor: Object childrenOf: dict.
+	self assert: (node at: 'id') equals: 'cls:Object'.
+	self assert: (node at: 'label') equals: 'Object'.
+	self assert: (node at: 'children') size equals: 1.
+	self
+		assert: ((node at: 'children') first at: 'id')
+		equals: 'cls:Behavior'.
+	self
+		assert: ((node at: 'children') first at: 'children') size
+		equals: 1.
+	self
+		assert:
+			(((node at: 'children') first at: 'children') first at: 'id')
+		equals: 'cls:Class'
 ]
 
 { #category : 'tests - selection - packages' }
@@ -156,9 +213,6 @@ PNSystemBrowserTest >> testPackageItemSelectedWithNilClearsSelection [
 	browser
 		instVarNamed: 'selectedPackage'
 		put: self samplePackages first.
-	"Calling the handler should clear the package selection. The handler
-	also re-emits widget commands; the fake adaptor swallows those, and
-	any widget operations are no-ops because the widgets are nil."
 	browser packageItemSelected: nil.
 	self assert: (browser instVarNamed: 'selectedPackage') isNil.
 	self assert: (browser instVarNamed: 'selectedTag') isNil
@@ -183,3 +237,66 @@ PNSystemBrowserTest >> testPackageItemSelectedWithUnknownPkgIdClears [
 	self assert: (browser instVarNamed: 'selectedPackage') isNil
 ]
 
+{ #category : 'tests - selection - classes' }
+PNSystemBrowserTest >> testClassItemSelectedLocatesClass [
+
+	browser instVarNamed: 'allClasses' put: { Object. Behavior }.
+	browser classItemSelected: 'cls:Behavior'.
+	self
+		assert: (browser instVarNamed: 'selectedClass')
+		equals: Behavior
+]
+
+{ #category : 'tests - selection - classes' }
+PNSystemBrowserTest >> testClassItemSelectedWithUnknownClassClears [
+
+	browser instVarNamed: 'allClasses' put: { Object. Behavior }.
+	browser classItemSelected: 'cls:NoSuchClass'.
+	self assert: (browser instVarNamed: 'selectedClass') isNil
+]
+
+{ #category : 'tests - side toggle' }
+PNSystemBrowserTest >> testBehaviorForSelectedClassDefaultsToInstanceSide [
+
+	browser instVarNamed: 'selectedClass' put: Object.
+	browser instVarNamed: 'currentSide' put: 'instance'.
+	self assert: browser behaviorForSelectedClass equals: Object
+]
+
+{ #category : 'tests - side toggle' }
+PNSystemBrowserTest >> testBehaviorForSelectedClassFollowsClassSideToggle [
+
+	browser instVarNamed: 'selectedClass' put: Object.
+	browser instVarNamed: 'currentSide' put: 'class'.
+	self
+		assert: browser behaviorForSelectedClass
+		equals: Object class
+]
+
+{ #category : 'tests - decorations' }
+PNSystemBrowserTest >> testDecorateSelectorOnNilBehavior [
+
+	self
+		assert: (browser decorateSelector: #foo forBehavior: nil)
+		equals: '  foo'
+]
+
+{ #category : 'tests - decorations' }
+PNSystemBrowserTest >> testDecorateSelectorMarksOverride [
+	"Behavior>>printOn: is an override of Object>>printOn:.  Make sure
+	the decoration picks that up."
+
+	self
+		assert: (browser decorateSelector: #printOn: forBehavior: Behavior)
+		equals: '> printOn:'
+]
+
+{ #category : 'tests - decorations' }
+PNSystemBrowserTest >> testDecorateSelectorMarksAbstract [
+	"Collection>>add: is famously abstract (sends
+	#subclassResponsibility), so the decoration is `*`."
+
+	self
+		assert: (browser decorateSelector: #add: forBehavior: Collection)
+		equals: '* add:'
+]
