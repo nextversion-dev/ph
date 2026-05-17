@@ -26,6 +26,10 @@ pharo-native-shell/build/
 # /tmp by default; the entry below catches stray copies in the workspace).
 *.log
 
+# Pharo's test runner dumps debug snapshots (.fuel files) into cwd when a
+# test errors. They're per-run artefacts, never source.
+*.fuel
+
 # macOS noise.
 .DS_Store
 

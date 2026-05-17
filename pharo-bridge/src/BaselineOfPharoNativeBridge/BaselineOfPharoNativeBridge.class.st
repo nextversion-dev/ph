@@ -44,5 +44,8 @@ BaselineOfPharoNativeBridge >> baseline: spec [
 			with: [ spec requires: 'PharoNative-AppKit-Widgets' ].
 		spec
 			package: 'PharoNative-AppKit-Tools'
-			with: [ spec requires: 'PharoNative-AppKit-Widgets' ] ]
+			with: [ spec requires: 'PharoNative-AppKit-Widgets' ].
+		spec
+			package: 'PharoNative-AppKit-Tools-Tests'
+			with: [ spec requires: 'PharoNative-AppKit-Tools' ] ]
 ]

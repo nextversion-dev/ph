@@ -176,5 +176,7 @@ final class WidgetHost {
         register(factory: SplitViewFactory())
         register(factory: TableViewFactory())
         register(factory: TextViewFactory())
+        register(factory: OutlineViewFactory())
+        register(factory: SearchFieldFactory())
     }
 }

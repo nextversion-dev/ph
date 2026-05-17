@@ -6,6 +6,13 @@ the same, but everything from window construction through the
 package/class/protocol/method queries down to source assembly happens in
 this image, in this class, hot-reloadable like any other Smalltalk code.
 
+Iteration 2 visual surface:
+  - Packages pane is an NSOutlineView: top-level rows are packages,
+    each package's children are its PackageTags. Selecting a tag scopes
+    the Classes pane to that tag.
+  - Every pane has a NSSearchField filter input above it that does a
+    case-insensitive substring match against the displayed names.
+
 Open via:
    PNSystemBrowser open
 "
@@ -16,25 +23,42 @@ Class {
 		'window',
 		'outerSplit',
 		'topSplit',
+		'packagesPane',
+		'classesPane',
+		'protocolsPane',
+		'methodsPane',
+		'packagesFilter',
+		'classesFilter',
+		'protocolsFilter',
+		'methodsFilter',
 		'packagesScroll',
 		'classesScroll',
 		'protocolsScroll',
 		'methodsScroll',
-		'sourceContainer',
-		'sourceScroll',
-		'sourceToolbar',
-		'acceptButton',
-		'statusLabel',
-		'packagesTable',
+		'packagesOutline',
 		'classesTable',
 		'protocolsTable',
 		'methodsTable',
+		'sourceContainer',
+		'sourceScroll',
+		'sourceToolbar',
 		'sourceTextView',
-		'packages',
-		'classes',
-		'protocols',
-		'methods',
+		'acceptButton',
+		'statusLabel',
+		'allPackages',
+		'allClasses',
+		'allProtocols',
+		'allMethods',
+		'displayedPackages',
+		'displayedClasses',
+		'displayedProtocols',
+		'displayedMethods',
+		'packageFilterText',
+		'classFilterText',
+		'protocolFilterText',
+		'methodFilterText',
 		'selectedPackage',
+		'selectedTag',
 		'selectedClass',
 		'selectedProtocol',
 		'selectedMethod'
@@ -52,9 +76,10 @@ PNSystemBrowser class >> open [
 { #category : 'opening' }
 PNSystemBrowser >> openWindow [
 
+	self initializeFilterState.
 	self buildWindow.
 	self wireSelectionHandlers.
-	self populatePackages.
+	self loadPackages.
 	window show.
 	"NSSplitView ignores #setPosition:ofDividerAt: until the split has
 	performed at least one layout pass. Set the divider AFTER the window
@@ -63,72 +88,155 @@ PNSystemBrowser >> openWindow [
 	^ self
 ]
 
+{ #category : 'initialization' }
+PNSystemBrowser >> initializeFilterState [
+
+	packageFilterText := ''.
+	classFilterText := ''.
+	protocolFilterText := ''.
+	methodFilterText := ''.
+	allPackages := #(  ).
+	allClasses := #(  ).
+	allProtocols := #(  ).
+	allMethods := #(  ).
+	displayedPackages := #(  ).
+	displayedClasses := #(  ).
+	displayedProtocols := #(  ).
+	displayedMethods := #(  )
+]
+
 { #category : 'building' }
 PNSystemBrowser >> buildWindow [
-	"Create the wrapper tree:
+	"Layout:
 		window
-		  outerSplit (vertical divider, horizontal arrangement) -- wait,
-		  actually NSSplitView.isVertical = false stacks vertically. We want
-		  the source pane below the lists, so outerSplit is non-vertical.
-		    topSplit (isVertical=true, four columns)
-		      packagesScroll -> packagesTable
-		      classesScroll  -> classesTable
-		      protocolsScroll -> protocolsTable
-		      methodsScroll  -> methodsTable
-		    sourceScroll -> sourceTextView"
+		  outerSplit (horizontal divider, stacked top/bottom)
+		    topSplit (vertical divider, four panes left-to-right)
+		      packagesPane: filter input + scrolled NSOutlineView
+		      classesPane / protocolsPane / methodsPane: same pattern
+		        but with NSTableViews
+		    sourceContainer
+		      sourceScroll -> sourceTextView
+		      sourceToolbar (Accept + status)"
 
 	window := PNNSWindow new
 		          title: 'Pharo System Browser (Pharo-driven)';
 		          contentSize: 1100 @ 720;
 		          yourself.
 
-	outerSplit := PNNSSplitView new
-		              vertical: false;
-		              dividerStyle: 'thin';
-		              yourself.
-
-	topSplit := PNNSSplitView new
-		            vertical: true;
-		            dividerStyle: 'thin';
-		            yourself.
-
-	packagesTable := self buildSingleColumnTable: 'Packages'.
+	packagesOutline := PNNSOutlineView new
+		                   columns: { (Dictionary new
+				                    at: 'title' put: 'Packages';
+				                    at: 'identifier' put: 'name';
+				                    yourself) };
+		                   yourself.
 	classesTable := self buildSingleColumnTable: 'Classes'.
 	protocolsTable := self buildSingleColumnTable: 'Protocols'.
 	methodsTable := self buildSingleColumnTable: 'Methods'.
 
-	packagesScroll := PNNSScrollView new
-		                  borderType: 'none';
-		                  documentView: packagesTable;
-		                  yourself.
-	classesScroll := PNNSScrollView new
-		                 borderType: 'none';
-		                 documentView: classesTable;
-		                 yourself.
-	protocolsScroll := PNNSScrollView new
-		                   borderType: 'none';
-		                   documentView: protocolsTable;
-		                   yourself.
-	methodsScroll := PNNSScrollView new
-		                 borderType: 'none';
-		                 documentView: methodsTable;
-		                 yourself.
+	packagesScroll := self wrapInScroll: packagesOutline.
+	classesScroll := self wrapInScroll: classesTable.
+	protocolsScroll := self wrapInScroll: protocolsTable.
+	methodsScroll := self wrapInScroll: methodsTable.
 
-	"Seed initial frames so NSSplitView has reasonable size hints for the
-	first layout pass; the dividerPositions: call after `show` then nails
-	the final divider position. AppKit also propagates the inner split's
-	width across the four columns as long as their initial widths are
-	non-zero."
-	packagesScroll frame: (0 @ 0 extent: 275 @ 420).
-	classesScroll frame: (275 @ 0 extent: 275 @ 420).
-	protocolsScroll frame: (550 @ 0 extent: 275 @ 420).
-	methodsScroll frame: (825 @ 0 extent: 275 @ 420).
-	topSplit frame: (0 @ 300 extent: 1100 @ 420).
+	packagesFilter := self buildFilterField: 'Filter packages'.
+	classesFilter := self buildFilterField: 'Filter classes'.
+	protocolsFilter := self buildFilterField: 'Filter protocols'.
+	methodsFilter := self buildFilterField: 'Filter methods'.
+
+	packagesPane := self buildPaneWith: packagesFilter scroll: packagesScroll.
+	classesPane := self buildPaneWith: classesFilter scroll: classesScroll.
+	protocolsPane := self buildPaneWith: protocolsFilter scroll: protocolsScroll.
+	methodsPane := self buildPaneWith: methodsFilter scroll: methodsScroll.
+
+	topSplit := PNNSSplitView new
+		            vertical: true;
+		            dividerStyle: 'thin';
+		            frame: (0 @ 300 extent: 1100 @ 420);
+		            yourself.
+	"Seed each pane's frame so the inner NSSplitView distributes them
+	evenly on the first layout pass."
+	packagesPane frame: (0 @ 0 extent: 275 @ 420).
+	classesPane frame: (275 @ 0 extent: 275 @ 420).
+	protocolsPane frame: (550 @ 0 extent: 275 @ 420).
+	methodsPane frame: (825 @ 0 extent: 275 @ 420).
 	topSplit
-		addArrangedSubview: packagesScroll;
-		addArrangedSubview: classesScroll;
-		addArrangedSubview: protocolsScroll;
-		addArrangedSubview: methodsScroll.
+		addArrangedSubview: packagesPane;
+		addArrangedSubview: classesPane;
+		addArrangedSubview: protocolsPane;
+		addArrangedSubview: methodsPane.
+
+	self buildSourcePane.
+
+	outerSplit := PNNSSplitView new
+		              vertical: false;
+		              dividerStyle: 'thin';
+		              frame: (0 @ 0 extent: 1100 @ 720);
+		              yourself.
+	outerSplit
+		addArrangedSubview: topSplit;
+		addArrangedSubview: sourceContainer.
+
+	window contentView addSubview: outerSplit.
+	outerSplit fillSuperview.
+
+	window onWillClose: [ self destroyAll ]
+]
+
+{ #category : 'building' }
+PNSystemBrowser >> buildSingleColumnTable: aTitle [
+
+	| table |
+	table := PNNSTableView new.
+	table columns: { (Dictionary new
+				 at: 'title' put: aTitle;
+				 at: 'identifier' put: 'name';
+				 yourself) }.
+	^ table
+]
+
+{ #category : 'building' }
+PNSystemBrowser >> wrapInScroll: aWidget [
+
+	^ PNNSScrollView new
+		  borderType: 'none';
+		  hasVerticalScroller: true;
+		  documentView: aWidget;
+		  yourself
+]
+
+{ #category : 'building' }
+PNSystemBrowser >> buildFilterField: aPlaceholder [
+
+	^ PNNSSearchField new
+		  placeholder: aPlaceholder;
+		  yourself
+]
+
+{ #category : 'building' }
+PNSystemBrowser >> buildPaneWith: aFilterField scroll: aScrollView [
+	"Compose a single column-pane: a 28-tall search field anchored at
+	the top, with the scroll view filling everything below it."
+
+	| pane |
+	pane := PNNSView new.
+	"Default frame is 275 x 420; later overridden when added to topSplit."
+	pane frame: (0 @ 0 extent: 275 @ 420).
+	"Search field pinned to the top edge.  In an unflipped NSView,
+	y grows upward, so minYMargin = flexible distance from BOTTOM,
+	which keeps the field stuck to the top as the pane grows taller."
+	aFilterField
+		frame: (4 @ 388 extent: 267 @ 26);
+		autoresizingMask: #( width minY ).
+	"Scroll fills the rest."
+	aScrollView
+		frame: (0 @ 0 extent: 275 @ 380);
+		autoresizingMask: #( width height ).
+	pane addSubview: aScrollView; addSubview: aFilterField.
+	^ pane
+]
+
+{ #category : 'building' }
+PNSystemBrowser >> buildSourcePane [
 
 	sourceTextView := PNNSTextView new
 		                  editable: true;
@@ -142,9 +250,6 @@ PNSystemBrowser >> buildWindow [
 		                autoresizingMask: #( width height );
 		                yourself.
 
-	"Toolbar pinned to the bottom of the source pane: Accept button on
-	the left, status label that fills the remaining width and reports
-	the result of the last save."
 	acceptButton := PNNSButton new
 		                title: 'Accept';
 		                frame: (8 @ 4 extent: 100 @ 28);
@@ -169,48 +274,375 @@ PNSystemBrowser >> buildWindow [
 		                   yourself.
 	sourceContainer
 		addSubview: sourceScroll;
-		addSubview: sourceToolbar.
-
-	outerSplit frame: (0 @ 0 extent: 1100 @ 720).
-	outerSplit
-		addArrangedSubview: topSplit;
-		addArrangedSubview: sourceContainer.
-
-	window contentView addSubview: outerSplit.
-	"Let the split grow with the window's content view."
-	outerSplit fillSuperview.
-
-	window onWillClose: [ self destroyAll ]
-]
-
-{ #category : 'building' }
-PNSystemBrowser >> buildSingleColumnTable: aTitle [
-	"Build a single-column table. We use a non-empty identifier so the
-	shell looks up cell values correctly; the header is hidden by the
-	shell when there is one column with an empty title, but a column
-	identifier of 'name' is what we use to populate cells."
-
-	| table |
-	table := PNNSTableView new.
-	table columns: { (Dictionary new
-				  at: 'title' put: aTitle;
-				  at: 'identifier' put: 'name';
-				  yourself) }.
-	^ table
+		addSubview: sourceToolbar
 ]
 
 { #category : 'wiring' }
 PNSystemBrowser >> wireSelectionHandlers [
 
-	packagesTable
-		onSelectionChanged: [ :row | self packageRowSelected: row ].
+	packagesOutline
+		onSelectionChanged: [ :id | self packageItemSelected: id ].
 	classesTable
 		onSelectionChanged: [ :row | self classRowSelected: row ].
 	protocolsTable
 		onSelectionChanged: [ :row | self protocolRowSelected: row ].
 	methodsTable
 		onSelectionChanged: [ :row | self methodRowSelected: row ].
+	packagesFilter
+		onTextChanged: [ :text | self packageFilterChanged: text ].
+	classesFilter
+		onTextChanged: [ :text | self classFilterChanged: text ].
+	protocolsFilter
+		onTextChanged: [ :text | self protocolFilterChanged: text ].
+	methodsFilter
+		onTextChanged: [ :text | self methodFilterChanged: text ].
 	acceptButton onClicked: [ self acceptSource ]
+]
+
+{ #category : 'loading - packages' }
+PNSystemBrowser >> loadPackages [
+
+	allPackages := self readAllPackages.
+	self refreshPackagesDisplay
+]
+
+{ #category : 'loading - packages' }
+PNSystemBrowser >> readAllPackages [
+	"Return all packages, sorted by name. Extracted so tests can stub
+	the package source."
+
+	^ (PackageOrganizer default packages
+		   asSortedCollection: [ :a :b | a name < b name ]) asArray
+]
+
+{ #category : 'filter handlers' }
+PNSystemBrowser >> packageFilterChanged: aString [
+
+	packageFilterText := aString ifNil: [ '' ].
+	self refreshPackagesDisplay
+]
+
+{ #category : 'filter handlers' }
+PNSystemBrowser >> classFilterChanged: aString [
+
+	classFilterText := aString ifNil: [ '' ].
+	self refreshClassesDisplay
+]
+
+{ #category : 'filter handlers' }
+PNSystemBrowser >> protocolFilterChanged: aString [
+
+	protocolFilterText := aString ifNil: [ '' ].
+	self refreshProtocolsDisplay
+]
+
+{ #category : 'filter handlers' }
+PNSystemBrowser >> methodFilterChanged: aString [
+
+	methodFilterText := aString ifNil: [ '' ].
+	self refreshMethodsDisplay
+]
+
+{ #category : 'display' }
+PNSystemBrowser >> refreshPackagesDisplay [
+	"Apply the current filter to allPackages and push the resulting tree
+	into the outline. We send a forest of `{ id, label, children }`
+	dictionaries; tags become child nodes of their owning package."
+
+	| items |
+	displayedPackages := self packagesFilteredBy: packageFilterText.
+	items := displayedPackages collect: [ :pkg | self treeNodeForPackage: pkg ].
+	packagesOutline items: items asArray
+]
+
+{ #category : 'display' }
+PNSystemBrowser >> treeNodeForPackage: aPackage [
+
+	^ Dictionary new
+		  at: 'id' put: 'pkg:' , aPackage name asString;
+		  at: 'label'
+		  put: aPackage name asString , '  ('
+			  , aPackage definedClasses size asString , ')';
+		  at: 'children' put: (self tagNodesForPackage: aPackage);
+		  yourself
+]
+
+{ #category : 'display' }
+PNSystemBrowser >> tagNodesForPackage: aPackage [
+	"Return tree nodes for aPackage's PackageTags.  Many packages have
+	no tags at all (or only the root tag), in which case we yield an
+	empty array and the package row is shown as a leaf."
+
+	| tagList |
+	tagList := [ aPackage tags ]
+		           on: Error
+		           do: [ :ignored | #(  ) ].
+	tagList isEmpty ifTrue: [ ^ Array new ].
+	^ ((tagList asSortedCollection: [ :a :b | a name < b name ]) asArray
+		   reject: [ :each | each isRoot or: [ each classes isEmpty ] ])
+		  collect: [ :tag |
+			  Dictionary new
+				  at: 'id'
+				  put: 'tag:' , aPackage name asString , ':'
+					  , tag name asString;
+				  at: 'label'
+				  put: tag name asString , '  ('
+					  , tag classes size asString , ')';
+				  yourself ]
+]
+
+{ #category : 'filtering' }
+PNSystemBrowser >> packagesFilteredBy: aString [
+	"Return the subset of allPackages whose name matches aString as a
+	case-insensitive substring. Empty string returns the full list.
+	Pure function: extracted so tests can drive it directly without
+	any widget plumbing."
+
+	aString trimBoth isEmpty ifTrue: [ ^ allPackages ].
+	^ allPackages select: [ :pkg |
+		  pkg name asLowercase
+			  includesSubstring: aString trimBoth asLowercase ]
+]
+
+{ #category : 'filtering' }
+PNSystemBrowser >> classesFilteredBy: aString [
+	"Return the subset of allClasses (3-element entries) whose display
+	name matches the filter."
+
+	aString trimBoth isEmpty ifTrue: [ ^ allClasses ].
+	^ allClasses select: [ :entry |
+		  (entry at: 3) asLowercase
+			  includesSubstring: aString trimBoth asLowercase ]
+]
+
+{ #category : 'filtering' }
+PNSystemBrowser >> protocolsFilteredBy: aString [
+
+	aString trimBoth isEmpty ifTrue: [ ^ allProtocols ].
+	^ allProtocols select: [ :p |
+		  p name asString asLowercase
+			  includesSubstring: aString trimBoth asLowercase ]
+]
+
+{ #category : 'filtering' }
+PNSystemBrowser >> methodsFilteredBy: aString [
+
+	aString trimBoth isEmpty ifTrue: [ ^ allMethods ].
+	^ allMethods select: [ :sel |
+		  sel asString asLowercase
+			  includesSubstring: aString trimBoth asLowercase ]
+]
+
+{ #category : 'selection - packages' }
+PNSystemBrowser >> packageItemSelected: anId [
+	"Outline selection sends us the chosen item's id. The id encodes
+	whether a package or a tag was picked."
+
+	anId ifNil: [ ^ self clearPackageSelection ].
+	(anId beginsWith: 'pkg:') ifTrue: [
+		selectedPackage := self packageNamed: (anId allButFirst: 4).
+		selectedTag := nil.
+		^ self packageSelectionChanged ].
+	(anId beginsWith: 'tag:') ifTrue: [
+		| rest pkgName tagName |
+		rest := anId allButFirst: 4.
+		pkgName := rest copyUpTo: $:.
+		tagName := rest copyAfter: $:.
+		selectedPackage := self packageNamed: pkgName.
+		selectedTag := selectedPackage
+			               ifNotNil: [
+				               selectedPackage
+					               tagNamed: tagName asSymbol
+					               ifAbsent: [ nil ] ].
+		^ self packageSelectionChanged ].
+	self clearPackageSelection
+]
+
+{ #category : 'selection - packages' }
+PNSystemBrowser >> clearPackageSelection [
+
+	selectedPackage := nil.
+	selectedTag := nil.
+	allClasses := #(  ).
+	displayedClasses := #(  ).
+	self refreshClassesDisplay.
+	self clearClassSelection
+]
+
+{ #category : 'selection - packages' }
+PNSystemBrowser >> packageSelectionChanged [
+
+	allClasses := self loadClassEntries.
+	self refreshClassesDisplay.
+	self clearClassSelection
+]
+
+{ #category : 'loading - classes' }
+PNSystemBrowser >> loadClassEntries [
+	"Return the entries to display in the Classes pane.  Each entry is a
+	3-tuple `{ instanceSideClass, sideString, displayName }`.  The class
+	side is shown as a separate row when it actually has methods, matching
+	v1's layout."
+
+	| source |
+	selectedPackage ifNil: [ ^ #(  ) ].
+	source := selectedTag
+		          ifNotNil: [ selectedTag classes ]
+		          ifNil: [ selectedPackage definedClasses ].
+	^ Array streamContents: [ :s |
+		  ((source asSortedCollection: [ :a :b | a name < b name ]) asArray)
+			  do: [ :each |
+				  s nextPut: { each. 'instance'. each name asString }.
+				  each classSide ifNotNil: [ :meta |
+					  meta hasMethods ifTrue: [
+						  s nextPut:
+							  { each. 'class'. each name asString , ' class' } ] ] ] ]
+]
+
+{ #category : 'display' }
+PNSystemBrowser >> refreshClassesDisplay [
+
+	displayedClasses := self classesFilteredBy: classFilterText.
+	classesTable rows:
+		(displayedClasses collect: [ :entry | Array with: (entry at: 3) ])
+]
+
+{ #category : 'selection - classes' }
+PNSystemBrowser >> classRowSelected: aRowIndex [
+
+	(aRowIndex < 0 or: [ aRowIndex >= displayedClasses size ]) ifTrue: [
+		^ self clearClassSelection ].
+	selectedClass := displayedClasses at: aRowIndex + 1.
+	allProtocols := self loadProtocolEntries.
+	self refreshProtocolsDisplay.
+	selectedProtocol := nil.
+	allMethods := self loadMethodSelectors.
+	self refreshMethodsDisplay.
+	sourceTextView string: ''
+]
+
+{ #category : 'selection - classes' }
+PNSystemBrowser >> clearClassSelection [
+
+	selectedClass := nil.
+	allProtocols := #(  ).
+	displayedProtocols := #(  ).
+	self refreshProtocolsDisplay.
+	selectedProtocol := nil.
+	allMethods := #(  ).
+	displayedMethods := #(  ).
+	self refreshMethodsDisplay.
+	sourceTextView string: ''
+]
+
+{ #category : 'loading - protocols' }
+PNSystemBrowser >> loadProtocolEntries [
+
+	| behavior |
+	behavior := self behaviorForSelectedClass.
+	behavior ifNil: [ ^ #(  ) ].
+	^ (behavior protocols asSortedCollection: [ :a :b |
+		   a name asString < b name asString ]) asArray
+]
+
+{ #category : 'display' }
+PNSystemBrowser >> refreshProtocolsDisplay [
+
+	| behavior |
+	behavior := self behaviorForSelectedClass.
+	displayedProtocols := self protocolsFilteredBy: protocolFilterText.
+	protocolsTable rows: (displayedProtocols collect: [ :p |
+			 | count |
+			 count := behavior
+				          ifNil: [ 0 ]
+				          ifNotNil: [
+				          (behavior selectorsInProtocol: p name) size ].
+			 Array with: p name asString , '  (' , count asString , ')' ])
+]
+
+{ #category : 'selection - protocols' }
+PNSystemBrowser >> protocolRowSelected: aRowIndex [
+
+	(aRowIndex < 0 or: [ aRowIndex >= displayedProtocols size ])
+		ifTrue: [ selectedProtocol := nil ]
+		ifFalse: [ selectedProtocol := displayedProtocols at: aRowIndex + 1 ].
+	allMethods := self loadMethodSelectors.
+	self refreshMethodsDisplay.
+	sourceTextView string: ''
+]
+
+{ #category : 'loading - methods' }
+PNSystemBrowser >> loadMethodSelectors [
+
+	| behavior selectors |
+	behavior := self behaviorForSelectedClass.
+	behavior ifNil: [ ^ #(  ) ].
+	selectors := selectedProtocol
+		             ifNil: [ behavior selectors ]
+		             ifNotNil: [
+		             behavior selectorsInProtocol: selectedProtocol name ].
+	^ (selectors asSortedCollection: [ :a :b |
+		   a asString < b asString ]) asArray
+]
+
+{ #category : 'display' }
+PNSystemBrowser >> refreshMethodsDisplay [
+
+	displayedMethods := self methodsFilteredBy: methodFilterText.
+	methodsTable rows:
+		(displayedMethods collect: [ :sel | Array with: sel asString ])
+]
+
+{ #category : 'selection - methods' }
+PNSystemBrowser >> methodRowSelected: aRowIndex [
+
+	(aRowIndex < 0 or: [ aRowIndex >= displayedMethods size ]) ifTrue: [
+		selectedMethod := nil.
+		sourceTextView string: ''.
+		statusLabel stringValue: ''.
+		^ self ].
+	selectedMethod := displayedMethods at: aRowIndex + 1.
+	statusLabel stringValue: ''.
+	self displaySelectedMethodSource
+]
+
+{ #category : 'private' }
+PNSystemBrowser >> displaySelectedMethodSource [
+
+	| behavior method src |
+	(selectedMethod isNil or: [ displayedMethods isEmpty ]) ifTrue: [
+		sourceTextView string: ''.
+		^ self ].
+	behavior := self behaviorForSelectedClass.
+	behavior ifNil: [ ^ self ].
+	method := behavior
+		          compiledMethodAt: selectedMethod asSymbol
+		          ifAbsent: [ nil ].
+	method ifNil: [
+		sourceTextView string: ''.
+		^ self ].
+	src := [ method sourceCode ]
+		       on: Error
+		       do: [ :ex | '"source unavailable: ' , ex messageText , '"' ].
+	sourceTextView string: src
+]
+
+{ #category : 'private' }
+PNSystemBrowser >> packageNamed: aString [
+
+	^ allPackages
+		  detect: [ :p | p name asString = aString ]
+		  ifNone: [ nil ]
+]
+
+{ #category : 'private' }
+PNSystemBrowser >> behaviorForSelectedClass [
+	"selectedClass is the 3-element array we built in #loadClassEntries."
+
+	selectedClass ifNil: [ ^ nil ].
+	^ (selectedClass at: 2) = 'class'
+		  ifTrue: [ (selectedClass at: 1) classSide ]
+		  ifFalse: [ (selectedClass at: 1) instanceSide ]
 ]
 
 { #category : 'editing' }
@@ -247,7 +679,8 @@ PNSystemBrowser >> acceptSource [
 	(e.g. you renamed the method) make sure the method list reflects
 	that, and re-select the freshly compiled method."
 	selectedMethod := result.
-	self populateMethods.
+	allMethods := self loadMethodSelectors.
+	self refreshMethodsDisplay.
 
 	"Persist to disk. Falling back to image-only when no Tonel repo
 	covers the package keeps the existing in-image behaviour for
@@ -326,157 +759,6 @@ PNSystemBrowser class >> writeBehaviorToTonel: aBehavior [
 	^ true
 ]
 
-{ #category : 'private' }
-PNSystemBrowser >> displaySelectedMethodSource [
-
-	| behavior method src |
-	(selectedMethod isNil or: [ methods isEmpty ]) ifTrue: [
-		sourceTextView string: ''.
-		^ self ].
-	behavior := self behaviorForSelectedClass.
-	behavior ifNil: [ ^ self ].
-	method := behavior
-		          compiledMethodAt: selectedMethod asSymbol
-		          ifAbsent: [ nil ].
-	method ifNil: [
-		sourceTextView string: ''.
-		^ self ].
-	src := [ method sourceCode ]
-		       on: Error
-		       do: [ :ex | '"source unavailable: ' , ex messageText , '"' ].
-	sourceTextView string: src
-]
-
-{ #category : 'populating' }
-PNSystemBrowser >> populatePackages [
-
-	packages := (PackageOrganizer default packages
-		             asSortedCollection: [ :a :b | a name < b name ])
-		            asArray.
-	packagesTable rows: (packages collect: [ :pkg |
-			 Array with: pkg name asString , '  (' , pkg definedClasses size asString , ')' ])
-]
-
-{ #category : 'selection handlers' }
-PNSystemBrowser >> packageRowSelected: aRowIndex [
-
-	(aRowIndex < 0 or: [ aRowIndex >= packages size ]) ifTrue: [
-		selectedPackage := nil.
-		classesTable rows: #().
-		protocolsTable rows: #().
-		methodsTable rows: #().
-		sourceTextView string: ''.
-		^ self ].
-	selectedPackage := packages at: aRowIndex + 1.
-	self populateClasses.
-	protocolsTable rows: #().
-	methodsTable rows: #().
-	sourceTextView string: ''
-]
-
-{ #category : 'populating' }
-PNSystemBrowser >> populateClasses [
-	"Show both instance- and class-sides for every class defined in the
-	selected package, mirroring v1's layout."
-
-	| sorted |
-	classes := OrderedCollection new.
-	sorted := selectedPackage definedClasses asSortedCollection: [ :a :b |
-		          a name < b name ].
-	sorted do: [ :each |
-		classes add: { each. 'instance'. each name asString }.
-		each classSide ifNotNil: [ :meta |
-			meta hasMethods ifTrue: [
-				classes add: { each. 'class'. each name asString , ' class' } ] ] ].
-	classesTable rows:
-		(classes collect: [ :entry | Array with: (entry at: 3) ])
-]
-
-{ #category : 'selection handlers' }
-PNSystemBrowser >> classRowSelected: aRowIndex [
-
-	(aRowIndex < 0 or: [ aRowIndex >= classes size ]) ifTrue: [
-		selectedClass := nil.
-		protocolsTable rows: #().
-		methodsTable rows: #().
-		sourceTextView string: ''.
-		^ self ].
-	selectedClass := classes at: aRowIndex + 1.
-	self populateProtocols.
-	"Default: show all methods until the user picks a protocol."
-	selectedProtocol := nil.
-	self populateMethods.
-	sourceTextView string: ''
-]
-
-{ #category : 'populating' }
-PNSystemBrowser >> populateProtocols [
-	"selectedClass is { instanceSideClass. 'instance' | 'class'. displayName }."
-
-	| behavior sorted |
-	behavior := self behaviorForSelectedClass.
-	behavior ifNil: [
-		protocolsTable rows: #().
-		^ self ].
-	sorted := (behavior protocols asSortedCollection: [ :a :b |
-		           a name asString < b name asString ]) asArray.
-	protocols := sorted.
-	protocolsTable rows: (sorted collect: [ :p |
-			 Array with: p name asString , '  ('
-			 , (behavior selectorsInProtocol: p name) size asString , ')' ])
-]
-
-{ #category : 'selection handlers' }
-PNSystemBrowser >> protocolRowSelected: aRowIndex [
-
-	(aRowIndex < 0 or: [ aRowIndex >= protocols size ])
-		ifTrue: [ selectedProtocol := nil ]
-		ifFalse: [ selectedProtocol := protocols at: aRowIndex + 1 ].
-	self populateMethods.
-	sourceTextView string: ''
-]
-
-{ #category : 'populating' }
-PNSystemBrowser >> populateMethods [
-
-	| behavior selectors |
-	behavior := self behaviorForSelectedClass.
-	behavior ifNil: [
-		methods := #(  ).
-		methodsTable rows: #().
-		^ self ].
-	selectors := selectedProtocol
-		             ifNil: [ behavior selectors ]
-		             ifNotNil: [
-		             behavior selectorsInProtocol: selectedProtocol name ].
-	methods := (selectors asSortedCollection: [ :a :b |
-		            a asString < b asString ]) asArray.
-	methodsTable rows: (methods collect: [ :sel | Array with: sel asString ])
-]
-
-{ #category : 'selection handlers' }
-PNSystemBrowser >> methodRowSelected: aRowIndex [
-
-	(aRowIndex < 0 or: [ aRowIndex >= methods size ]) ifTrue: [
-		selectedMethod := nil.
-		sourceTextView string: ''.
-		statusLabel stringValue: ''.
-		^ self ].
-	selectedMethod := methods at: aRowIndex + 1.
-	statusLabel stringValue: ''.
-	self displaySelectedMethodSource
-]
-
-{ #category : 'private' }
-PNSystemBrowser >> behaviorForSelectedClass [
-	"selectedClass is the 3-element array we built in #populateClasses."
-
-	selectedClass ifNil: [ ^ nil ].
-	^ (selectedClass at: 2) = 'class'
-		  ifTrue: [ (selectedClass at: 1) classSide ]
-		  ifFalse: [ (selectedClass at: 1) instanceSide ]
-]
-
 { #category : 'lifecycle' }
 PNSystemBrowser >> destroyAll [
 	"Tear down every wrapper. Called from the willClose handler. We
@@ -485,10 +767,10 @@ PNSystemBrowser >> destroyAll [
 
 	#( acceptButton statusLabel sourceToolbar
 	   sourceTextView sourceScroll sourceContainer
-	   methodsTable methodsScroll
-	   protocolsTable protocolsScroll
-	   classesTable classesScroll
-	   packagesTable packagesScroll
+	   methodsTable methodsScroll methodsFilter methodsPane
+	   protocolsTable protocolsScroll protocolsFilter protocolsPane
+	   classesTable classesScroll classesFilter classesPane
+	   packagesOutline packagesScroll packagesFilter packagesPane
 	   topSplit outerSplit window )
 		do: [ :ivar |
 			(self instVarNamed: ivar) ifNotNil: [ :w |
