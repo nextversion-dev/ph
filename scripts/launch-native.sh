@@ -16,6 +16,7 @@ REPO_ROOT="$(cd "${SCRIPTS_DIR}/.." ; pwd -P)"
 VM="${VM:-${REPO_ROOT}/pharo-vm/build/build/vm/Debug/Pharo.app}"
 IMAGE="${IMAGE:-${REPO_ROOT}/pharo/build/bootstrap-cache/Pharo.image}"
 MARKER="${MARKER:-/tmp/pn-launch-native}"
+TRIGGER="${TRIGGER:-/tmp/pn-trigger}"
 
 if [ ! -d "${VM}" ]; then
     echo "VM bundle not found: ${VM}" >&2
@@ -26,11 +27,17 @@ if [ ! -f "${IMAGE}" ]; then
     exit 1
 fi
 
-# PNAutoStart consumes (deletes) this file when it fires, so a successful
-# launch leaves the workspace clean for the next launch-morphic.sh.
-touch "${MARKER}"
-
-echo "Launching Pharo (Morphic + native System Browser) on ${IMAGE}"
-# Image path is in Pharo.app's Info.plist (stamped by install.sh), so
-# a bare `open -a` is enough.
-open -a "${VM}"
+# Two distinct cases. PNAutoStart's #startUp: only fires on a fresh
+# image launch, so when Pharo is already running we have to nudge the
+# image's running trigger-file watcher instead.
+if pgrep -f "${VM}/Contents/MacOS/" >/dev/null; then
+    echo "Pharo already running; firing native browser via trigger file"
+    touch "${TRIGGER}"
+    open -a "${VM}"   # bring focus
+else
+    echo "Launching Pharo (Morphic + native System Browser) on ${IMAGE}"
+    touch "${MARKER}"
+    # Image path is in Pharo.app's Info.plist (stamped by install.sh)
+    # so a bare `open -a` is enough.
+    open -a "${VM}"
+fi

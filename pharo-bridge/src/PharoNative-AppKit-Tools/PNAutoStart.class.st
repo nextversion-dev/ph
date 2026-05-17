@@ -1,18 +1,24 @@
 "
-PNAutoStart is a SessionManager startup hook that opens a native System
-Browser at image launch when a marker file is present. It lets launcher
-scripts pick whether the image starts up plain (Morphic only) or with
-the native UI already on screen, without modifying the saved image
-between launches.
+PNAutoStart bridges launcher scripts to the running Pharo image. It
+serves two roles, both keyed off small filesystem markers:
 
-The marker file lives at `/tmp/pn-launch-native`. If it exists when the
-image starts up, PNAutoStart forks a short-delayed `PNSystemBrowser open`
-so the native window appears alongside Morphic. The marker is consumed
-(deleted) immediately so a stale marker can't surprise later launches.
+  /tmp/pn-launch-native   -- one-shot startup marker. When the session
+                             begins and this file exists, PNAutoStart
+                             consumes it and opens a PNSystemBrowser.
+                             Used by scripts/launch-native.sh on a fresh
+                             image launch.
 
-Launcher scripts:
-   scripts/launch-morphic.sh -> deletes the marker, opens the image
-   scripts/launch-native.sh   -> touches the marker, opens the image
+  /tmp/pn-trigger         -- runtime trigger. A forked watcher process
+                             polls for this file every second. When it
+                             appears the watcher deletes it and opens
+                             a PNSystemBrowser. Used by
+                             scripts/launch-native.sh when Pharo is
+                             already running (in which case `open -a`
+                             just refocuses the existing instance and
+                             the startup hook never fires).
+
+Both markers ensure the launcher does the right thing regardless of
+whether the image is being started fresh or only refocused.
 "
 Class {
 	#name : 'PNAutoStart',
@@ -33,24 +39,38 @@ PNAutoStart class >> markerPath [
 	^ '/tmp/pn-launch-native'
 ]
 
+{ #category : 'accessing' }
+PNAutoStart class >> triggerPath [
+
+	^ '/tmp/pn-trigger'
+]
+
 { #category : 'system startup' }
 PNAutoStart class >> shutDown: quitting [
-	"Nothing to do on shutdown; we have no per-instance state."
+	"Nothing to do on shutdown; the watcher process is killed by the
+	session manager along with all other non-resumable processes."
 ]
 
 { #category : 'system startup' }
 PNAutoStart class >> startUp: isImageLaunching [
-	"Fires once per session start. When isImageLaunching is false the
-	image is resuming from a save, in which case our marker is stale by
-	definition. When true, check the marker and consume it."
+	"Fires once per session start. On a fresh image launch we also check
+	the one-shot marker so scripts/launch-native.sh can open the native
+	browser before the user sees anything."
+
+	isImageLaunching ifFalse: [ ^ self ].
+	self consumeStartupMarker.
+	self installTriggerWatcher
+]
+
+{ #category : 'private' }
+PNAutoStart class >> consumeStartupMarker [
+	"If the one-shot marker is present, delete it and open a native
+	browser ~500 ms later (Morphic finishes initialising first)."
 
 	| marker |
-	isImageLaunching ifFalse: [ ^ self ].
 	marker := self markerPath asFileReference.
 	marker exists ifFalse: [ ^ self ].
 	[ marker delete ] on: Error do: [ :ignored | ].
-	"Brief delay so Morphic, settings, etc. have finished their own
-	startUp: hooks before we ask the bridge to spawn PharoNativeShell."
 	[
 	(Delay forMilliseconds: 500) wait.
 	[ PNSystemBrowser open ]
@@ -62,4 +82,39 @@ PNAutoStart class >> startUp: isImageLaunching [
 				cr ] ]
 		forkAt: Processor userBackgroundPriority
 		named: 'PNAutoStart open'
+]
+
+{ #category : 'private' }
+PNAutoStart class >> installTriggerWatcher [
+	"Fork a long-running poll watcher that opens a native browser when
+	a trigger file appears. The watcher restarts itself on every image
+	launch via #startUp:."
+
+	[ self triggerWatcherLoop ]
+		forkAt: Processor userBackgroundPriority
+		named: 'PNAutoStart trigger watcher'
+]
+
+{ #category : 'private' }
+PNAutoStart class >> triggerWatcherLoop [
+	"Poll /tmp/pn-trigger once per second. When it appears, consume the
+	file and open a native browser. Errors per iteration are swallowed
+	so a transient FS hiccup never silently kills the watcher."
+
+	[ true ] whileTrue: [
+		[
+		| trigger |
+		trigger := self triggerPath asFileReference.
+		trigger exists ifTrue: [
+			[ trigger delete ] on: Error do: [ :ignored | ].
+			[ PNSystemBrowser open ]
+				on: Error
+				do: [ :ex |
+					Transcript
+						show: 'PNAutoStart trigger: ';
+						show: ex messageText;
+						cr ] ] ]
+			on: Error
+			do: [ :ignored | ].
+		(Delay forSeconds: 1) wait ]
 ]
