@@ -216,11 +216,12 @@ PNSystemBrowser >> wireSelectionHandlers [
 { #category : 'editing' }
 PNSystemBrowser >> acceptSource [
 	"Read the current source from the native text view and compile it
-	into the selected behavior under the selected protocol. Surfaces
-	compile errors and Smalltalk exceptions via the status label rather
-	than letting them bubble up."
+	into the selected behavior under the selected protocol, then write
+	the updated class back to its Tonel source file on disk so the
+	change survives a fresh image bootstrap. Surfaces every kind of
+	error through the status label."
 
-	| behavior protocolName source result |
+	| behavior protocolName source result wroteToDisk diskNote |
 	behavior := self behaviorForSelectedClass.
 	behavior ifNil: [
 		statusLabel stringValue: 'no class selected'.
@@ -247,11 +248,82 @@ PNSystemBrowser >> acceptSource [
 	that, and re-select the freshly compiled method."
 	selectedMethod := result.
 	self populateMethods.
+
+	"Persist to disk. Falling back to image-only when no Tonel repo
+	covers the package keeps the existing in-image behaviour for
+	packages that haven't been registered with a working copy."
+	wroteToDisk := [ self writeBehaviorToTonel: behavior ]
+		               on: Error
+		               do: [ :ex | ex ].
+	diskNote := wroteToDisk == true
+		            ifTrue: [ ' (saved to disk)' ]
+		            ifFalse: [
+			            wroteToDisk == false
+				            ifTrue: [ ' (image-only; no Tonel repo)' ]
+				            ifFalse: [
+				            ' (image-only; tonel error: '
+				            , (wroteToDisk messageText ifNil: [ wroteToDisk class name asString ])
+				            , ')' ] ].
 	statusLabel
 		stringValue:
-		'saved: ' , behavior name asString , ' >> ' , result asString.
+		'saved: ' , behavior name asString , ' >> ' , result asString
+		, diskNote.
 	"Re-read from the image so any formatter normalisation shows up."
 	self displaySelectedMethodSource
+]
+
+{ #category : 'editing' }
+PNSystemBrowser >> writeBehaviorToTonel: aBehavior [
+	"Convenience: forward to the class-side utility."
+
+	^ self class writeBehaviorToTonel: aBehavior
+]
+
+{ #category : 'editing' }
+PNSystemBrowser class >> writeBehaviorToTonel: aBehavior [
+	"Rewrite aBehavior's Tonel source file from its current in-image
+	state so edits made via the Accept button survive a fresh image
+	bootstrap. Returns true on success, false if the package has no
+	matching Tonel repository registered (i.e. nothing was written).
+	Errors propagate so the caller can surface them.
+
+	We find the right repository by walking
+	MCRepositoryGroup default repositories looking for a
+	TonelRepository whose directory contains the package's folder.
+	Both pharo/src and pharo-bridge/src are registered by install.sh,
+	so methods in any package living in either tree get persisted."
+
+	| pkg snap classDef repo packageDir stream writer instanceSide fileName |
+	instanceSide := aBehavior instanceSide.
+	pkg := instanceSide package.
+	pkg ifNil: [ ^ false ].
+	snap := (MCPackage new name: pkg name) snapshot.
+	classDef := snap definitions
+		            detect: [ :d |
+			            d isClassDefinition and: [
+				            d className = instanceSide name asString ] ]
+		            ifNone: [ nil ].
+	classDef ifNil: [ ^ false ].
+	repo := MCRepositoryGroup default repositories
+		        detect: [ :r |
+			        r class name == #TonelRepository and: [
+				        (r directory / pkg name) exists ] ]
+		        ifNone: [ nil ].
+	repo ifNil: [ ^ false ].
+	packageDir := repo directory / pkg name.
+	fileName := classDef className , '.class.st'.
+	stream := WriteStream on: String new.
+	writer := TonelWriter new
+		          snapshot: snap;
+		          directoryReference: repo directory;
+		          yourself.
+	writer writeClass: classDef on: stream.
+	"Truncate-and-write the file with UTF-8 bytes so the read side
+	(TonelReader on UTF-8 streams) round-trips correctly."
+	(packageDir / fileName) ensureDelete.
+	(packageDir / fileName) binaryWriteStreamDo: [ :s |
+		s nextPutAll: stream contents utf8Encoded ].
+	^ true
 ]
 
 { #category : 'private' }
