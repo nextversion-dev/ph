@@ -1,0 +1,31 @@
+# Upstream Pharo trees -- both are their own git repositories cloned in
+# place, not tracked here.
+pharo/
+pharo-vm/
+
+# Build outputs produced by the Swift apps' build.sh wrappers.
+pharo-native-browser/build/
+pharo-native-shell/build/
+
+# Stray CMake build artifacts that leaked into the workspace root during
+# early VM bring-up. Their real home is pharo-vm/build/.
+/CMakeCache.txt
+/CMakeFiles/
+/LibSSH2-build/
+/LibSSH2-download/
+/LibGit2-build/
+/LibGit2-download/
+/build/
+/version.info
+/PharoDebug.log
+
+# Cursor session ephemera. Plans are kept; everything else is per-session.
+.cursor/projects/
+
+# macOS noise.
+.DS_Store
+
+# Swift / Xcode noise we may pick up later.
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
