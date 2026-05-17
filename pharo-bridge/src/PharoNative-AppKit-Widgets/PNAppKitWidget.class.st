@@ -98,6 +98,22 @@ PNAppKitWidget >> setProp: aName value: aValue [
 ]
 
 { #category : 'private' }
+PNAppKitWidget >> getProp: aName [
+	"Read back the current value of a named property. The shell returns
+	{ value: ... }, so we unwrap before answering."
+
+	| response |
+	self ensureNotDestroyed.
+	response := adaptor
+		            call: 'widget.getProp'
+		            params: (Dictionary new
+				             at: 'id' put: id;
+				             at: 'name' put: aName;
+				             yourself).
+	^ response at: 'value' ifAbsent: [ nil ]
+]
+
+{ #category : 'private' }
 PNAppKitWidget >> invoke: aSelector [
 
 	^ self invoke: aSelector args: #()

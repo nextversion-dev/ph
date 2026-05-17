@@ -33,6 +33,12 @@ protocol WidgetFactory {
                    widgetId: String,
                    emit: @escaping (String, JSONValue) -> Void) throws
 
+    /// Read back the current value of a named property. The default
+    /// implementation throws unknownProperty; widgets that hold mutable
+    /// state the client may want to query (NSTextView's string, for
+    /// instance) should override.
+    func getProperty(_ name: String, on object: AnyObject) throws -> JSONValue
+
     /// Tear down anything the factory installed (e.g. close windows,
     /// remove observers). The host removes the entry from its registry
     /// after this returns.
@@ -55,6 +61,10 @@ extension WidgetFactory {
                    widgetId: String,
                    emit: @escaping (String, JSONValue) -> Void) throws {
         throw WidgetError.unknownEvent("\(typeName) does not emit '\(event)'")
+    }
+
+    func getProperty(_ name: String, on object: AnyObject) throws -> JSONValue {
+        throw WidgetError.unknownProperty("\(typeName) has no readable property '\(name)'")
     }
 
     func tearDown(_ object: AnyObject) {

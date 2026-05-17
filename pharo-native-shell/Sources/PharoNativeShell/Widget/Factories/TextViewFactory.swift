@@ -84,6 +84,22 @@ final class TextViewFactory: WidgetFactory {
                 ?? NSFont.monospacedSystemFont(ofSize: CGFloat(size), weight: .regular)
         case "frame":
             tv.frame = try WidgetProps.parseFrame(value)
+        case "autoresizingMask":
+            tv.autoresizingMask = WidgetProps.parseAutoresizingMask(value)
+        default:
+            throw WidgetError.unknownProperty(name)
+        }
+    }
+
+    func getProperty(_ name: String, on object: AnyObject) throws -> JSONValue {
+        guard let tv = object as? NSTextView else {
+            throw WidgetError.internalError("expected NSTextView")
+        }
+        switch name {
+        case "string":
+            return .string(tv.string)
+        case "editable":
+            return .bool(tv.isEditable)
         default:
             throw WidgetError.unknownProperty(name)
         }

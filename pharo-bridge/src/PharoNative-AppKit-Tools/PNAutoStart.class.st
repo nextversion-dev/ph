@@ -58,6 +58,10 @@ PNAutoStart class >> startUp: isImageLaunching [
 	browser before the user sees anything."
 
 	isImageLaunching ifFalse: [ ^ self ].
+	"Drop any stale PNAppKitAdaptor singleton carried over in the image's
+	class variables. Its sockets and reader process are dead after the
+	save/resume cycle and would otherwise be reused, silently."
+	[ PNAppKitAdaptor reset ] on: Error do: [ :ignored | ].
 	self consumeStartupMarker.
 	self installTriggerWatcher
 ]

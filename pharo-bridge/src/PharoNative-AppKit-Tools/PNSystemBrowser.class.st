@@ -20,7 +20,11 @@ Class {
 		'classesScroll',
 		'protocolsScroll',
 		'methodsScroll',
+		'sourceContainer',
 		'sourceScroll',
+		'sourceToolbar',
+		'acceptButton',
+		'statusLabel',
 		'packagesTable',
 		'classesTable',
 		'protocolsTable',
@@ -127,20 +131,50 @@ PNSystemBrowser >> buildWindow [
 		addArrangedSubview: methodsScroll.
 
 	sourceTextView := PNNSTextView new
-		                  editable: false;
+		                  editable: true;
 		                  string: '';
 		                  yourself.
 	sourceScroll := PNNSScrollView new
 		                borderType: 'none';
 		                hasVerticalScroller: true;
 		                documentView: sourceTextView;
-		                frame: (0 @ 0 extent: 1100 @ 300);
+		                frame: (0 @ 36 extent: 1100 @ 264);
+		                autoresizingMask: #( width height );
 		                yourself.
+
+	"Toolbar pinned to the bottom of the source pane: Accept button on
+	the left, status label that fills the remaining width and reports
+	the result of the last save."
+	acceptButton := PNNSButton new
+		                title: 'Accept';
+		                frame: (8 @ 4 extent: 100 @ 28);
+		                yourself.
+	statusLabel := PNNSTextField new
+		               stringValue: '';
+		               editable: false;
+		               bordered: false;
+		               frame: (118 @ 8 extent: 974 @ 22);
+		               autoresizingMask: #( width );
+		               yourself.
+	sourceToolbar := PNNSView new
+		                 frame: (0 @ 0 extent: 1100 @ 36);
+		                 autoresizingMask: #( width );
+		                 yourself.
+	sourceToolbar
+		addSubview: acceptButton;
+		addSubview: statusLabel.
+
+	sourceContainer := PNNSView new
+		                   frame: (0 @ 0 extent: 1100 @ 300);
+		                   yourself.
+	sourceContainer
+		addSubview: sourceScroll;
+		addSubview: sourceToolbar.
 
 	outerSplit frame: (0 @ 0 extent: 1100 @ 720).
 	outerSplit
 		addArrangedSubview: topSplit;
-		addArrangedSubview: sourceScroll.
+		addArrangedSubview: sourceContainer.
 
 	window contentView addSubview: outerSplit.
 	"Let the split grow with the window's content view."
@@ -175,7 +209,70 @@ PNSystemBrowser >> wireSelectionHandlers [
 	protocolsTable
 		onSelectionChanged: [ :row | self protocolRowSelected: row ].
 	methodsTable
-		onSelectionChanged: [ :row | self methodRowSelected: row ]
+		onSelectionChanged: [ :row | self methodRowSelected: row ].
+	acceptButton onClicked: [ self acceptSource ]
+]
+
+{ #category : 'editing' }
+PNSystemBrowser >> acceptSource [
+	"Read the current source from the native text view and compile it
+	into the selected behavior under the selected protocol. Surfaces
+	compile errors and Smalltalk exceptions via the status label rather
+	than letting them bubble up."
+
+	| behavior protocolName source result |
+	behavior := self behaviorForSelectedClass.
+	behavior ifNil: [
+		statusLabel stringValue: 'no class selected'.
+		^ self ].
+	protocolName := selectedProtocol
+		                ifNotNil: [ selectedProtocol name asString ]
+		                ifNil: [ 'as yet unclassified' ].
+	source := [ sourceTextView string ]
+		          on: Error
+		          do: [ :ex |
+			          statusLabel stringValue:
+				          'failed to read source: ' , ex messageText.
+			          nil ].
+	source ifNil: [ ^ self ].
+	result := [ behavior compile: source classified: protocolName ]
+		          on: Error
+		          do: [ :ex |
+			          statusLabel stringValue:
+				          'compile error: ' , ex messageText.
+			          nil ].
+	result ifNil: [ ^ self ].
+	"#compile:classified: answers the new selector. If it changed
+	(e.g. you renamed the method) make sure the method list reflects
+	that, and re-select the freshly compiled method."
+	selectedMethod := result.
+	self populateMethods.
+	statusLabel
+		stringValue:
+		'saved: ' , behavior name asString , ' >> ' , result asString.
+	"Re-read from the image so any formatter normalisation shows up."
+	self displaySelectedMethodSource
+]
+
+{ #category : 'private' }
+PNSystemBrowser >> displaySelectedMethodSource [
+
+	| behavior method src |
+	(selectedMethod isNil or: [ methods isEmpty ]) ifTrue: [
+		sourceTextView string: ''.
+		^ self ].
+	behavior := self behaviorForSelectedClass.
+	behavior ifNil: [ ^ self ].
+	method := behavior
+		          compiledMethodAt: selectedMethod asSymbol
+		          ifAbsent: [ nil ].
+	method ifNil: [
+		sourceTextView string: ''.
+		^ self ].
+	src := [ method sourceCode ]
+		       on: Error
+		       do: [ :ex | '"source unavailable: ' , ex messageText , '"' ].
+	sourceTextView string: src
 ]
 
 { #category : 'populating' }
@@ -288,27 +385,14 @@ PNSystemBrowser >> populateMethods [
 { #category : 'selection handlers' }
 PNSystemBrowser >> methodRowSelected: aRowIndex [
 
-	| behavior method source |
 	(aRowIndex < 0 or: [ aRowIndex >= methods size ]) ifTrue: [
 		selectedMethod := nil.
 		sourceTextView string: ''.
+		statusLabel stringValue: ''.
 		^ self ].
 	selectedMethod := methods at: aRowIndex + 1.
-	behavior := self behaviorForSelectedClass.
-	behavior ifNil: [
-		sourceTextView string: ''.
-		^ self ].
-	method := behavior
-		          compiledMethodAt: selectedMethod asSymbol
-		          ifAbsent: [ nil ].
-	method ifNil: [
-		sourceTextView string: ''.
-		^ self ].
-	source := [ method sourceCode ]
-		          on: Error
-		          do: [ :ex |
-			          '"source unavailable: ' , ex messageText , '"' ].
-	sourceTextView string: source
+	statusLabel stringValue: ''.
+	self displaySelectedMethodSource
 ]
 
 { #category : 'private' }
@@ -327,7 +411,8 @@ PNSystemBrowser >> destroyAll [
 	swallow errors per-widget because a partly-destroyed tree must not
 	prevent the rest from being cleaned up."
 
-	#( sourceTextView sourceScroll
+	#( acceptButton statusLabel sourceToolbar
+	   sourceTextView sourceScroll sourceContainer
 	   methodsTable methodsScroll
 	   protocolsTable protocolsScroll
 	   classesTable classesScroll

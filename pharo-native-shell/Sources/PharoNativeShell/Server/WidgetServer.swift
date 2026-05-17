@@ -21,6 +21,8 @@ final class WidgetServer {
         self.host = WidgetHost()
     }
 
+    static let portFilePath = "/tmp/pharo-native-shell.port"
+
     func start() throws {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
@@ -36,8 +38,11 @@ final class WidgetServer {
         listener.newConnectionHandler = { [weak self] connection in
             self?.accept(connection: connection)
         }
-        listener.stateUpdateHandler = { state in
+        listener.stateUpdateHandler = { [weak self] state in
             NSLog("PharoNativeShell: listener state %@", String(describing: state))
+            if case .ready = state {
+                self?.writePortFile()
+            }
         }
         listener.start(queue: queue)
     }
@@ -45,6 +50,19 @@ final class WidgetServer {
     func stop() {
         connection?.cancel()
         listener?.cancel()
+        // Best-effort cleanup so a stale port file doesn't make the next
+        // Pharo image try to connect to a dead listener.
+        try? FileManager.default.removeItem(atPath: WidgetServer.portFilePath)
+    }
+
+    private func writePortFile() {
+        // Publish the actual listening port so a Pharo image can find us
+        // even when launched separately (or auto-restored by macOS).
+        do {
+            try String(port).write(toFile: WidgetServer.portFilePath, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("PharoNativeShell: failed to write port file: %@", error.localizedDescription)
+        }
     }
 
     // MARK: connection lifecycle

@@ -102,6 +102,8 @@ final class TableViewFactory: NSObject, WidgetFactory {
             table.usesAlternatingRowBackgroundColors = value.asBool ?? false
         case "frame":
             table.frame = try WidgetProps.parseFrame(value)
+        case "autoresizingMask":
+            table.autoresizingMask = WidgetProps.parseAutoresizingMask(value)
         default:
             throw WidgetError.unknownProperty(name)
         }

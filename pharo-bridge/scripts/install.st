@@ -33,6 +33,10 @@ Metacello new
 	onConflictUseIncoming;
 	load.
 
+"Drop any stale singleton state so the saved image starts cold."
+(Smalltalk classNamed: #PNAppKitAdaptor) ifNotNil: [ :cls |
+	[ cls reset ] on: Error do: [ :ignored | ] ].
+
 Transcript
 	show: 'PharoNativeBridge installed.';
 	cr;

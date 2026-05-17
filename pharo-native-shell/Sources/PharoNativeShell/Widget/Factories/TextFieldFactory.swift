@@ -39,6 +39,8 @@ final class TextFieldFactory: WidgetFactory {
             field.drawsBackground = bordered || field.isEditable
         case "frame":
             field.frame = try WidgetProps.parseFrame(value)
+        case "autoresizingMask":
+            field.autoresizingMask = WidgetProps.parseAutoresizingMask(value)
         default:
             throw WidgetError.unknownProperty(name)
         }

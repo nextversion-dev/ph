@@ -28,6 +28,8 @@ final class ButtonFactory: WidgetFactory {
             button.isEnabled = value.asBool ?? true
         case "frame":
             button.frame = try WidgetProps.parseFrame(value)
+        case "autoresizingMask":
+            button.autoresizingMask = WidgetProps.parseAutoresizingMask(value)
         default:
             throw WidgetError.unknownProperty(name)
         }

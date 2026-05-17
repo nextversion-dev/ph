@@ -24,6 +24,14 @@ PNNSTextView >> string: aString [
 ]
 
 { #category : 'properties' }
+PNNSTextView >> string [
+	"Read the text view's current contents back from the shell. Useful
+	when the user has edited the field; pair with #editable: true."
+
+	^ (self getProp: 'string') ifNil: [ '' ]
+]
+
+{ #category : 'properties' }
 PNNSTextView >> attributedRuns: anArrayOfRunDictionaries [
 	"Apply colored runs on top of the current string. Each run is a
 	Dictionary with keys 'location' (Int), 'length' (Int), and

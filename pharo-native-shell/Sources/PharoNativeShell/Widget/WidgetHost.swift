@@ -40,6 +40,7 @@ final class WidgetHost {
         switch method {
         case "widget.create":   return try handleCreate(params: params)
         case "widget.setProp":  return try handleSetProp(params: params)
+        case "widget.getProp":  return try handleGetProp(params: params)
         case "widget.addChild": return try handleAddChild(params: params)
         case "widget.invoke":   return try handleInvoke(params: params)
         case "widget.subscribe":return try handleSubscribe(params: params)
@@ -83,6 +84,17 @@ final class WidgetHost {
         let entry = try lookup(id)
         try entry.factory.setProperty(name, value: dict["value"] ?? .null, on: entry.object)
         return .object(["ok": .bool(true)])
+    }
+
+    private func handleGetProp(params: JSONValue?) throws -> JSONValue {
+        guard let dict = params?.asObject,
+              let id = dict["id"]?.asString,
+              let name = dict["name"]?.asString else {
+            throw WidgetError.badRequest("widget.getProp requires id and name")
+        }
+        let entry = try lookup(id)
+        let value = try entry.factory.getProperty(name, on: entry.object)
+        return .object(["value": value])
     }
 
     private func handleAddChild(params: JSONValue?) throws -> JSONValue {

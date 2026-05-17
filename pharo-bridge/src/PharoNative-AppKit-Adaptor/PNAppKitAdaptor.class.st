@@ -162,12 +162,59 @@ PNAppKitAdaptor >> nextWidgetId [
 
 { #category : 'control' }
 PNAppKitAdaptor >> ensureStarted [
-	"Start the shell process and connect to it if we have not already."
+	"Start the shell process and connect to it if we have not already.
+	If an existing shell is reachable via the port file it writes on
+	startup, reuse that instead of spawning a duplicate -- otherwise
+	macOS's auto-relaunch of PharoNativeShell.app gives us a stale shell
+	on a different port that `open -a` cannot redirect."
 
 	(stream isNotNil and: [ stream isConnected ]) ifTrue: [ ^ self ].
+	(self tryConnectToExistingShell)
+		ifTrue: [ ^ self startReader ].
 	self startShell.
 	self connect.
 	self startReader
+]
+
+{ #category : 'control' }
+PNAppKitAdaptor >> tryConnectToExistingShell [
+	"If /tmp/pharo-native-shell.port exists and we can reach the port it
+	names within 200 ms, hook up to that shell. Otherwise tear down and
+	answer false so the caller can spawn a fresh shell."
+
+	| portFile content port |
+	portFile := '/tmp/pharo-native-shell.port' asFileReference.
+	portFile exists ifFalse: [ ^ false ].
+	content := [ portFile contents asString trimBoth ]
+		           on: Error
+		           do: [ :ignored | '' ].
+	port := [ content asNumber asInteger ]
+		        on: Error
+		        do: [ :ignored | 0 ].
+	(port isNil or: [ port = 0 ]) ifTrue: [ ^ false ].
+	^ [
+	  socket := Socket newTCP.
+	  socket
+		  connectTo: NetNameResolver localHostAddress
+		  port: port.
+	  socket waitForConnectionFor: 1.
+	  socket isConnected
+		  ifTrue: [
+			  shellPort := port.
+			  stream := SocketStream on: socket.
+			  stream timeout: 365 * 24 * 3600.
+			  true ]
+		  ifFalse: [
+			  socket destroy.
+			  socket := nil.
+			  false ] ]
+		  on: Error
+		  do: [ :ignored |
+			  [ socket ifNotNil: [ :s | s destroy ] ]
+				  on: Error
+				  do: [ :ig | ].
+			  socket := nil.
+			  false ]
 ]
 
 { #category : 'control' }
