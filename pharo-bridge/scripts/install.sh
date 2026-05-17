@@ -35,4 +35,14 @@ PHARO_BRIDGE_REPO="${REPO_ROOT}/pharo-bridge" \
     st "${SCRIPTS_DIR}/install.st" \
     --save --quit
 
+# Stamp the VM bundle's Info.plist with the image path so `open -a Pharo.app`
+# launches straight into the image instead of putting up the "Choose an image
+# file" picker. Idempotent: PlistBuddy 'Set' if present, 'Add' otherwise.
+PLIST="${REPO_ROOT}/pharo-vm/build/build/vm/Debug/Pharo.app/Contents/Info.plist"
+if [ -f "${PLIST}" ]; then
+    echo "Stamping VM bundle Info.plist with PharoImageFile=${IMAGE}"
+    /usr/libexec/PlistBuddy -c "Set :PharoImageFile ${IMAGE}" "${PLIST}" 2>/dev/null \
+        || /usr/libexec/PlistBuddy -c "Add :PharoImageFile string ${IMAGE}" "${PLIST}"
+fi
+
 echo "Done. Launch the image normally; Browse -> Native System Browser is now available."
